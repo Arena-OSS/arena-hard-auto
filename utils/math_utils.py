@@ -10,7 +10,7 @@ import multiprocessing as mp
 from tqdm import tqdm
 from dataclasses import dataclass
 from functools import partial
-from typing import Dict, Callable, Optional
+from typing import Dict, Callable, Optional, Tuple
 
 REGISTER_LOSSES: Dict[str, Callable] = {}
 REGISTER_MODELS: Dict[str, Callable] = {}
@@ -73,7 +73,7 @@ def bt_loss(
     # more stable than the original implementation
     loss = F.binary_cross_entropy_with_logits(
         logits,
-        outcomes.float(),
+        outcomes.to(dtype=logits.dtype),
         reduction='sum'
     )
     
@@ -110,11 +110,11 @@ def fit_pairwise_model(
     features: torch.Tensor, 
     outcomes: torch.Tensor,
     loss_type: str = 'bt', 
-    indices: torch.Tensor = None,
-    lr: float = 0.1, 
+    indices: Optional[torch.Tensor] = None,
+    lr: Optional[float] = None,
     tol: float = 1e-9, 
-    max_epochs: int = 50
-):
+    max_epochs: Optional[int] = None,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     model_cls = REGISTER_MODELS[loss_type]
     loss_func = REGISTER_LOSSES[loss_type]
     
@@ -126,15 +126,21 @@ def fit_pairwise_model(
     
     model = model_cls(num_components=features.shape[1])
 
+    if loss_type == "bt":
+        features = features.to(dtype=torch.float64)
+        outcomes = outcomes.to(dtype=torch.float64)
+        model = model.to(device=features.device, dtype=features.dtype)
+
     optimizer = optim.LBFGS(
         model.parameters(),
-        lr=lr,
-        max_iter=max_epochs,
+        lr=lr if lr is not None else (1.0 if loss_type == "bt" else 0.1),
+        max_iter=max_epochs if max_epochs is not None else (1000 if loss_type == "bt" else 50),
         tolerance_grad=tol,
         tolerance_change=tol,
+        line_search_fn="strong_wolfe" if loss_type == "bt" else None,
     )
 
-    def closure():
+    def closure() -> torch.Tensor:
         optimizer.zero_grad()
         logits, eta = model()
                 
