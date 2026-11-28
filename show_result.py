@@ -1,5 +1,6 @@
 import pandas as pd
 import argparse
+import json
 import os
 import torch
 from glob import glob
@@ -33,6 +34,20 @@ def load_judgments(judge_names, benchmark, weight=3):
     
     print(f"Number of null judgments found: {len(data) - len(_data)}")
     
+    # Collapse copied judgments before expanding their scores into battle rows.
+    identity = ["judge", "model", "baseline", "category", "uid"]
+    repeated = _data.duplicated(subset=identity, keep=False)
+    if repeated.any():
+        copies = _data.loc[repeated, identity].assign(
+            _games=_data.loc[repeated, "games"].map(
+                lambda games: json.dumps(games, sort_keys=True)
+            )
+        ).drop_duplicates()
+        conflicts = copies.loc[copies.duplicated(subset=identity, keep=False), identity]
+        if not conflicts.empty:
+            raise ValueError(f"Conflicting judgments for {conflicts.iloc[0].to_dict()}")
+        _data = _data.drop_duplicates(subset=identity).copy()
+
     # map label to score
     label_to_score = {
         "A>B": [1],
